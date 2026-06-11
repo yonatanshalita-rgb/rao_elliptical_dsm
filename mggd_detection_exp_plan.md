@@ -1,23 +1,19 @@
-# MGGD Detection Experiment — Implementation Plan
+# MGGD Detection Experiment — Implementation Plan (v2)
 
 ## Goal
 
-Show that DSM-based Rao detectors beat classical methods at low training-sample counts
-on MGGD data (p=64, beta=0.5), while MLE Rao and Oracle AMF dominate asymptotically.
-The key thesis claim: even without knowing the true MGGD parameters, a DSM-trained score
-model gives a near-optimal detector once N is large enough, and beats MLE when N < p.
+Show that DSM-based Rao detectors beat classical methods at low N on heavy-tailed MGGD
+data (β=0.2, ρ=0.8), while MLE Rao and Oracle recover asymptotically.
+Two sweep axes: N_train (can we learn from few samples?) and SNR (does the gap depend
+on signal strength?).
 
 ---
 
 ## Detector family: Rao test
 
-For H0: x ~ MGGD(0, M, m, β),  H1: x ~ MGGD(α·s, M, m, β) with α > 0,
-the Rao statistic is the gradient of the log-likelihood w.r.t. α at α=0:
+H0: x ~ MGGD(0, M, m=1, β),   H1: x = θ·s + noise,  noise ~ MGGD(0, M, m=1, β)
 
-    T(x) = s^T · ∇_x log p(x|H0)  =  s^T · score(x)
-
-Each method supplies a different score estimator; we evaluate T on held-out test
-samples under H0 and H1, then compute the ROC.
+Rao statistic: T(x) = s^T · score(x)   (gradient of log-likelihood w.r.t. θ at θ=0)
 
 ---
 
@@ -26,18 +22,12 @@ samples under H0 and H1, then compute the ROC.
 | Label | score estimator | notes |
 |---|---|---|
 | Oracle Rao | true MGGD score (formula, true M/m/β) | upper bound |
-| MLE Rao | score from Pascal MLE parameters | returns None when N<p+2 — skip |
+| MLE Rao | Pascal MLE parameters | skip when fit returns None |
 | TwoBranch Rao | trained two_branch model | main DSM method |
 | Linear Rao | trained linear_mse model | DSM ablation |
 | MGGD Constrained Rao | trained mggd_constrained model | structured DSM |
-| Tyler AMF | (s^T C_Tyler^{-1} x) / sqrt(s^T C_Tyler^{-1} s) | returns None when N<p+1 — skip |
-| Oracle Gaussian AMF | (s^T M_true^{-1} x) / sqrt(s^T M_true^{-1} s) | mismatched model (Gaussian) |
-
-All Rao statistics are normalized: T(x) = (s^T score(x)) / ||s|| so that the
-threshold is on the same scale regardless of signal direction.
-
-The Oracle Gaussian AMF is included as a reference for "what Gaussian assumption buys you"
-— it will be suboptimal because the data is genuinely MGGD.
+| Tyler AMF | (s^T C_Tyler^{-1} x) / sqrt(s^T C_Tyler^{-1} s) | skip when fit returns None |
+| Oracle Gaussian AMF | (s^T M_true^{-1} x) / sqrt(s^T M_true^{-1} s) | mismatched Gaussian model |
 
 ---
 
@@ -45,61 +35,80 @@ The Oracle Gaussian AMF is included as a reference for "what Gaussian assumption
 
 ```
 p       = 64
-beta    = 0.5       # Gaussian-like but MGGD; change to 0.2 to show heavier-tail gap
+beta    = 0.2          # heavy-tailed; largest gap between MGGD-aware and Gaussian AMF
 m       = 1.0
-M       = AR(1) covariance with rho=0.3  (reuse ar1_covariance from score exp)
-sigma   = 0.3       (DSM noise level; fixed across all runs)
-s       = M e_1 / ||M e_1||   (signal in first eigenvector direction of M)
-SNR     = 3.0       (H1 samples: x = snr * s + noise, where noise ~ MGGD(0,M,m,beta))
-N_test  = 10 000   (H0 + H1 balanced for ROC; reuse same test set across N_train)
-Pfa     = 0.01      (threshold for Pd@Pfa plot)
+rho     = 0.8          # AR(1) covariance, matching score experiment
+M       = ar1_covariance(p, rho=0.8)
+s       = ones(p) / sqrt(p)          # matches make_test_fixed_theta in existing code
+sigma   = 0.3          # DSM noise level (fixed)
+N_test  = 50_000       # H0 + H1 balanced; reused across all N_train
+Pfa     = 0.01
 ```
 
 ---
 
-## Varying axis: N_train
+## Varying axis 1: N_train
 
-```
-N_VALUES = [20, 50, 100, 200, 500, 1000, 2000, 5000]
-N_MC     = 5   (seeds 0..4; mean + 1-sigma band in plots)
+```python
+N_TRAIN_LIST = [20, 50, 100, 200, 500, 1000, 2000, 5000, 20_000]
+N_MC         = 5        # mean ± 1-std band
 ```
 
-For each N_train, N_MC seed pairs:
-1. Draw X_train (N_train × p) from H0
-2. Draw X_val (max(N_train//5, p+1) × p) from H0 (DSM validation only)
-3. Fit classical baselines on X_train
-4. Train DSM models on X_train / X_val (sigma=0.3, adaptive epochs)
-5. Evaluate all detectors on X_test_h0, X_test_h1
+**No val set.** All N_train samples go to DSM training. Dropping the val set keeps the
+N budget identical for DSM and the classical baselines (both use exactly N_train samples),
+and avoids giving DSM a hidden disadvantage at small N. Use fixed adaptive epochs without
+early stopping: `epochs = max(100, 10_000 // max(1, N_train // BATCH_SIZE))`.
+
+---
+
+## Varying axis 2: SNR
+
+```python
+EVAL_SNR_LIST = [1, 3, 5, 10, 15, 20]   # dB
+```
+
+Both sweep axes produce separate plots (see Figures below).
 
 ---
 
 ## H1 sample generation
 
+SNR in dB defines the signal amplitude via the matched-filter normalisation:
+
 ```python
-# Draw background sample from MGGD, then shift by SNR*s
-x_h1 = sample_mggd(N_test, p, M, m, beta, seed=...) + SNR * s[None, :]
+C = s @ M_inv @ s                                  # scalar, s^T M^{-1} s
+theta = np.sqrt(10 ** (snr_db / 10.0) / C)        # matches make_test_fixed_theta
+x_h1 = sample_mggd(N_test, p, M, m, beta, seed=...) + theta * s[None, :]
 ```
 
-The score is evaluated at the raw test point x (background model), so the Rao test
-is always T(x) = s^T · score_h0(x).  The threshold is swept over T values to get ROC.
+The score is always evaluated under H0 (background model).
 
 ---
 
-## Metrics
+## ROC and metrics
 
-1. **AUC** vs N_train (main plot): mean ± std over N_MC seeds, all methods
-2. **Pd @ Pfa=0.01** vs N_train: same layout
-3. **ROC curve** at N_train=200: all methods on one figure (log-scale Pfa axis)
+```python
+from sklearn.metrics import roc_auc_score, roc_curve
+
+y_true  = np.concatenate([np.zeros(N_test), np.ones(N_test)])
+y_score = np.concatenate([T_h0, T_h1])             # T(x) = s^T score(x)
+auc     = roc_auc_score(y_true, y_score)
+fpr, tpr, _ = roc_curve(y_true, y_score)
+pd_at_pfa   = np.interp(Pfa, fpr, tpr)
+```
 
 ---
 
 ## Figures
 
 ```
-figures/mggd_det_auc_p64_beta0.5.png
-figures/mggd_det_pd_p64_beta0.5.png
-figures/mggd_det_roc_N200_p64_beta0.5.png
+figures/mggd_det_pd_vs_N_snrXX_p64_beta0.2.png   # Pd@Pfa=0.01 vs N_train, one per SNR
+figures/mggd_det_pd_vs_snr_NXX_p64_beta0.2.png   # Pd@Pfa=0.01 vs SNR, one per N_train
+figures/mggd_det_roc_N200_snr5_p64_beta0.2.png    # ROC curve at N=200, SNR=5 dB
 ```
+
+Primary plot: Pd vs N_train at SNR=5 dB (enough separation to distinguish methods).
+Secondary plot: Pd vs SNR at N_train ∈ {200, 1000, 5000}.
 
 ---
 
@@ -107,66 +116,67 @@ figures/mggd_det_roc_N200_p64_beta0.5.png
 
 ```
 mggd_detection_exp.py
-  run_detection(N_VALUES, N_MC, snr, sigma, n_epochs) -> dict
-    results[(method_label, n)] = list of (auc, pd) tuples
-  plot_detection(results, ...)
-  main() with argparse (--quick, --dim, --snr, --n_mc, --device)
+  run_detection(N_TRAIN_LIST, EVAL_SNR_LIST, N_MC, sigma, n_epochs_fn) -> dict
+    results[(method, n_train, snr_db)] = list of (auc, pd) over N_MC seeds
+  plot_detection_vs_N(results, fixed_snr, ...)
+  plot_detection_vs_snr(results, n_values, ...)
+  main() — argparse: --quick, --snr_list, --n_mc, --device
 ```
 
-Reuse from score experiment:
+Reuse:
 - `ar1_covariance`, `sample_mggd`, `mggd_true_score` from `data.generate`
 - `fit_mggd_mle`, `score_mggd_mle`, `fit_tyler_safe`, `score_tyler_linear` from `baselines.classical`
-- `_train_dsm`, `_eval_dsm` (copy/adapt from score experiment)
+- `build_model`, `dsm_mse_loss` from `models.*`; mirror `_train_dsm` / `_eval_dsm` from score experiment
 
 ---
 
 ## Key implementation details
 
-### Tyler and MLE None handling
-Both can fail at low N. Use the same skip-and-don't-record pattern as the score experiment.
-When Tyler returns None, Tyler AMF is simply absent from that (seed, N) point.
-When MLE returns None, MLE Rao is absent.
+### Adaptive epochs (no val set)
+```python
+BATCH_SIZE = 256
+def n_epochs(n_train):
+    return max(100, 10_000 // max(1, n_train // BATCH_SIZE))
+```
+No `X_val` is passed to training. Training runs to the fixed epoch count.
 
 ### Oracle Gaussian AMF
-Does not need training. At each seed, compute:
-```python
-T_amf = (X_test @ M_inv @ s) / np.sqrt(s @ M_inv @ s)   # (N_test,)
+Deterministic (uses true M). Compute once per n_train/SNR pair; record the same value
+for all N_MC seeds (or just compute inside the loop — it is free).
+
+### Tyler / MLE None handling
+Same skip-and-don't-record pattern as the score experiment. At N_train < p+1 (Tyler)
+or N_train < p+2 (MLE), those methods simply have no data point on the curve.
+
+### Inner loop order
 ```
-This is deterministic (uses true M) so result is the same across seeds.
-Still include in the mc loop to keep code uniform; record auc/pd once per n.
-
-### DSM training
-Reuse `_train_dsm` from `mggd_score_experiment.py` verbatim.
-For quick mode: 50 epochs. Full mode: adaptive (max(100, 6000 // max(1, N//BATCH_SIZE))).
-
-### ROC computation
-```python
-from sklearn.metrics import roc_auc_score, roc_curve
-y_true = np.concatenate([np.zeros(N_test), np.ones(N_test)])
-y_score = np.concatenate([T_h0, T_h1])
-auc = roc_auc_score(y_true, y_score)
-fpr, tpr, _ = roc_curve(y_true, y_score)
-pd_at_pfa = np.interp(Pfa, fpr, tpr)
+for n_train in N_TRAIN_LIST:
+    fit/train all methods once on X_train (N_MC seeds)
+    for snr_db in EVAL_SNR_LIST:
+        generate X_test_h0, X_test_h1  (same seed for all methods at same snr)
+        evaluate T(x) for each method → record (auc, pd)
 ```
+Training is outer, SNR evaluation is inner — avoids re-training for each SNR point.
 
-### Plot style
-- AUC and Pd plots: same color/marker scheme as score experiment
-  (Oracle = dashed black, MLE = solid blue, TwoBranch = solid red, Linear = green,
-   MGGD Constrained = orange, Tyler AMF = purple, Oracle Gaussian AMF = dashed gray)
-- Fill ±1 std band; mark points where method was absent (None) as gaps in the curve
-- ROC curves: log-scale x-axis (Pfa), linear y-axis (Pd)
+### Per-seed progress print
+After each mc seed finishes all SNR evaluations, print:
+```
+  [N=200 mc 3/5 snr=5] Oracle cos=1.000 MLE pd=0.812 Two pd=0.743 ...
+```
 
 ---
 
 ## Potential issues
 
-- **N_train < p for Tyler at small N**: Tyler needs N≥p+1. At N=20 (p=64), Tyler is always
-  None. That is expected and the gap illustrates the proposed advantage.
-- **MLE needs N≥p+2**: at N=20, 50 (< 66), MLE is always None. Same comment.
-- **DSM sigma=0.3**: chosen to be non-negligible relative to signal scale but not so large
-  that DSM score is entirely dominated by noise. The score experiment showed σ=0.3 gives
-  a visible bias floor at large N; for detection that's fine because all methods share the
-  same evaluation — relative ranking is what matters.
-- **SNR calibration**: SNR=3.0 may be too easy or too hard depending on beta. Quick check:
-  if Oracle Rao AUC ≈ 1.0 at N_test=10000, reduce SNR to 1.0 to widen the gap between methods.
-  Add `--snr` flag to make this tunable without code edits.
+- **β=0.2 heavy tails at small N**: MLE will fail (return None) for most seeds when
+  N_train < ~p+10 due to numerical instability beyond the p+2 guard. This is expected
+  and is the point — DSM fills the gap.
+- **No val set overfitting risk**: at N_train=20, DSM has very few samples. With fixed
+  epochs and no early stopping, overfitting is possible. If Pd for DSM is worse than
+  Oracle Gaussian AMF at N=20, consider re-introducing a small fixed val set (e.g.,
+  N_val=20 held out separately, not subtracted from N_train budget).
+- **SNR=1 dB is very low**: all methods may have Pd ≈ Pfa = 0.01. That is fine — it
+  shows the floor. SNR=20 dB may saturate all methods at Pd=1. The interesting range
+  is 3–10 dB.
+- **N_test=50k for β=0.2**: MGGD with β=0.2 has heavy tails; 50k samples gives stable
+  ROC estimates even at Pfa=0.01 (500 false-alarm samples in expectation).
