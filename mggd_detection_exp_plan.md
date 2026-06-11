@@ -108,7 +108,7 @@ figures/mggd_det_roc_N200_snr5_p64_beta0.2.png    # ROC curve at N=200, SNR=5 dB
 ```
 
 Primary plot: Pd vs N_train at SNR=5 dB (enough separation to distinguish methods).
-Secondary plot: Pd vs SNR at N_train ∈ {200, 1000, 5000}.
+Secondary plot: Pd vs SNR at N_train ∈ {200, 1000, 5000, 20000}.
 
 ---
 
@@ -120,12 +120,17 @@ mggd_detection_exp.py
     results[(method, n_train, snr_db)] = list of (auc, pd) over N_MC seeds
   plot_detection_vs_N(results, fixed_snr, ...)
   plot_detection_vs_snr(results, n_values, ...)
-  main() — argparse: --quick, --snr_list, --n_mc, --device
+  main() — argparse: --quick, --snr_list, --n_mc, --device, --eval_only
 ```
+
+`--eval_only`: skip training, load saved checkpoints from `checkpoints/det_<mtype>_N<n>_mc<mc>.pt`,
+replot from saved results dict (`results/mggd_det_results.pkl`). Training 9 N values × 5 seeds × 3 DSM
+models is expensive; this flag allows re-running the plots or changing SNR eval without retraining.
 
 Reuse:
 - `ar1_covariance`, `sample_mggd`, `mggd_true_score` from `data.generate`
 - `fit_mggd_mle`, `score_mggd_mle`, `fit_tyler_safe`, `score_tyler_linear` from `baselines.classical`
+  (all four already exist — added by the score experiment)
 - `build_model`, `dsm_mse_loss` from `models.*`; mirror `_train_dsm` / `_eval_dsm` from score experiment
 
 ---
@@ -134,9 +139,9 @@ Reuse:
 
 ### Adaptive epochs (no val set)
 ```python
-BATCH_SIZE = 256
+BATCH_SIZE = 512
 def n_epochs(n_train):
-    return max(100, 10_000 // max(1, n_train // BATCH_SIZE))
+    return max(100, 6_000 // max(1, n_train // BATCH_SIZE))
 ```
 No `X_val` is passed to training. Training runs to the fixed epoch count.
 
