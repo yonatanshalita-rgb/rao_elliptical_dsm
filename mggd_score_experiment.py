@@ -207,9 +207,9 @@ def run_synthetic(N_VALUES, N_MC, beta_list, p: int,
                 if tyler_cache[mc] is not None:
                     _record(results, (group, "baseline", "Tyler AMF", n),
                             tyler_cache[mc], s_true)
-            mle_vals = results.get((group, "baseline", "Pascal MLE", n), [])
-            if mle_vals:
-                print(f"  [baselines] MLE MSE={np.mean(mle_vals):.4f}", flush=True)
+            mle_entry = results.get((group, "baseline", "Pascal MLE", n))
+            if mle_entry:
+                print(f"  [baselines] MLE MSE={np.mean(mle_entry['mse']):.4f}", flush=True)
 
             # DSM methods — retrain at each sigma
             for sigma in sigma_list:
@@ -224,14 +224,14 @@ def run_synthetic(N_VALUES, N_MC, beta_list, p: int,
                         s_hat = _eval_dsm(model, X_test)
                         _record(results, (group, sigma, label, n), s_hat, s_true)
                     # running average after each seed
-                    lin_v  = results.get((group, sigma, "Linear DSM",       n), [])
-                    two_v  = results.get((group, sigma, "TwoBranch DSM",    n), [])
-                    mgg_v  = results.get((group, sigma, "MGGD Constrained", n), [])
+                    def _rmse(k):
+                        e = results.get(k)
+                        return np.mean(e["mse"]) if e else float("nan")
                     print(
                         f"  [sigma={sigma} mc {mc+1}/{N_MC}]"
-                        f" Lin={np.mean(lin_v):.4f}"
-                        f" Two={np.mean(two_v):.4f}"
-                        f" MGGD={np.mean(mgg_v):.4f}",
+                        f" Lin={_rmse((group, sigma, 'Linear DSM',       n)):.4f}"
+                        f" Two={_rmse((group, sigma, 'TwoBranch DSM',    n)):.4f}"
+                        f" MGGD={_rmse((group, sigma, 'MGGD Constrained', n)):.4f}",
                         flush=True,
                     )
 
