@@ -24,6 +24,7 @@ Covariance estimators
 
 import numpy as np
 from typing import Callable
+from scipy.special import digamma
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +259,107 @@ def huber_detector(y: np.ndarray, s: np.ndarray,
     C_hat = huber_estimator(W, beta=beta)
     C_inv = np.linalg.inv(C_hat)
     return amf_statistic(y, s, C_inv)
+
+
+# ---------------------------------------------------------------------------
+# MGGD MLE (Pascal et al. 2013)
+# ---------------------------------------------------------------------------
+
+def _mggd_beta_score(beta: float, y: np.ndarray, p: int, N: int) -> float:
+    """Eq (13) of Pascal et al. 2013 — set to zero to find MLE beta."""
+    S = np.sum(y ** beta)
+    lny = np.log(np.maximum(y, 1e-300))
+    term1 = (p * N / (2.0 * S)) * np.sum((y ** beta) * lny)
+    term2 = (p * N / (2.0 * beta)) * (digamma(p / (2.0 * beta)) + np.log(2.0))
+    term3 = N
+    term4 = (p * N / (2.0 * beta)) * np.log((beta / (p * N)) * S)
+    return term1 - term2 - term3 - term4
+
+
+def fit_mggd_mle(X: np.ndarray, max_iter: int = 100,
+                 tol: float = 1e-6) -> tuple | None:
+    """
+    MLE for MGGD(M, m, beta) via Algorithm 1 of Pascal et al. 2013.
+
+    Returns (M, m, beta) or None if the problem is ill-conditioned.
+    Tr(M) = p is enforced at every iteration.
+    """
+    N, p = X.shape
+    if N < p + 2:
+        return None
+
+    # initialise
+    M = (p / N) * (X.T @ X)
+    tr = np.trace(M)
+    if tr < 1e-10:
+        return None
+    M = M * p / tr
+    beta = 0.5
+
+    for _ in range(max_iter):
+        eigs = np.linalg.eigvalsh(M)
+        if eigs.min() < 1e-8 * eigs.max():
+            return None
+        M_inv = np.linalg.inv(M)
+
+        # Mahalanobis distances y_i = x_i^T M^{-1} x_i
+        y = np.einsum("ni,ij,nj->n", X, M_inv, X)    # (N,)
+        y = np.maximum(y, 1e-12)
+
+        # --- fixed-point for M (eq. 9) ---
+        S = np.sum(y ** beta)
+        weights = (y ** (beta - 1.0))                 # (N,)
+        M_new = (p / S) * (X.T * weights[None, :]) @ X
+        tr_new = np.trace(M_new)
+        if tr_new < 1e-10:
+            return None
+        M_new = M_new * p / tr_new
+
+        # --- closed form for m (eq. 8) ---
+        m = ((beta / (p * N)) * S) ** (1.0 / beta)
+
+        # --- Newton-Raphson for beta (eq. 13) ---
+        eps = 1e-4
+        f0 = _mggd_beta_score(beta,       y, p, N)
+        fp = _mggd_beta_score(beta + eps, y, p, N)
+        fm = _mggd_beta_score(beta - eps, y, p, N)
+        df = (fp - fm) / (2.0 * eps)
+        if abs(df) > 1e-12:
+            beta = beta - f0 / df
+        beta = float(np.clip(beta, 0.05, 2.0))
+
+        # convergence
+        delta = np.linalg.norm(M_new - M, "fro") / max(np.linalg.norm(M, "fro"), 1e-10)
+        M = M_new
+        if delta < tol:
+            break
+
+    return M, float(m), float(beta)
+
+
+def score_mggd_mle(X_test: np.ndarray, M: np.ndarray,
+                   m: float, beta: float) -> np.ndarray:
+    """Analytic MGGD score using fitted (M, m, beta)."""
+    M_inv = np.linalg.inv(M)
+    Minv_x = X_test @ M_inv.T                                # (N, p)
+    y = (X_test * Minv_x).sum(axis=1)                        # (N,)
+    y = np.maximum(y, 1e-12)
+    weight = -(beta / (m ** beta)) * (y ** (beta - 1.0))     # (N,)
+    return (weight[:, None] * Minv_x).astype(np.float32)
+
+
+def fit_tyler_safe(X: np.ndarray) -> np.ndarray | None:
+    """Tyler estimator; returns None when N < p (rank-deficient)."""
+    N, p = X.shape
+    if N < p + 1:
+        return None
+    return tyler_estimator(X)
+
+
+def score_tyler_linear(X_test: np.ndarray, C: np.ndarray) -> np.ndarray:
+    """Linear score -C^{-1} x using a pre-fitted Tyler scatter matrix."""
+    C_inv = np.linalg.inv(C)
+    return -(X_test @ C_inv.T).astype(np.float32)
 
 
 CLASSICAL_DETECTORS = {

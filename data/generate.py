@@ -81,6 +81,51 @@ MU_DISTRIBUTIONS = {
 
 
 # ---------------------------------------------------------------------------
+# MGGD sampler and true score
+# ---------------------------------------------------------------------------
+
+def sample_mggd(n: int, p: int, M: np.ndarray, m: float, beta: float,
+                seed: int = 0) -> np.ndarray:
+    """
+    Sample from MGGD(M, m, beta) via the stochastic representation
+        x = tau * L * u
+    where u is uniform on the unit sphere, L is the Cholesky factor of M,
+    and tau^{2*beta} ~ Gamma(p/(2*beta), 2*m^beta).
+
+    Returns: (n, p) float32 array.
+    """
+    rng = np.random.default_rng(seed)
+    L = np.linalg.cholesky(M)          # M = L L^T
+
+    z = rng.standard_normal((n, p))
+    norms = np.linalg.norm(z, axis=1, keepdims=True)
+    u = z / norms                      # uniform on unit sphere, (n, p)
+
+    shape = p / (2.0 * beta)
+    scale = 2.0 * (m ** beta)
+    g = rng.gamma(shape, scale, size=n)   # g = tau^{2*beta}
+    tau = g ** (1.0 / (2.0 * beta))       # (n,)
+
+    x = tau[:, None] * (u @ L.T)          # (n, p)
+    return x.astype(np.float32)
+
+
+def mggd_true_score(x: np.ndarray, M_inv: np.ndarray,
+                    m: float, beta: float) -> np.ndarray:
+    """
+    True score of MGGD(M, m, beta):
+        ∇_x log p = -(beta / m^beta) * (x^T M^{-1} x)^{beta-1} * M^{-1} x
+
+    x:     (n, p)
+    Returns: (n, p) float32
+    """
+    Minv_x = x @ M_inv.T                               # (n, p)
+    y = (x * Minv_x).sum(axis=1)                       # (n,)  x^T M^{-1} x
+    weight = -(beta / (m ** beta)) * (y ** (beta - 1)) # (n,)
+    return (weight[:, None] * Minv_x).astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
 # Dataset
 # ---------------------------------------------------------------------------
 

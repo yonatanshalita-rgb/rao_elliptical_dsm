@@ -125,11 +125,12 @@ def dsm_huber_loss(psi_net: nn.Module, w: Tensor, sigma: float = 0.1,
 
 
 LOSS_FNS = {
-    "linear_mse":   dsm_mse_loss,
-    "linear_huber": dsm_huber_loss,
-    "two_branch":   dsm_mse_loss,
-    "fixed_weight": dsm_mse_loss,
-    "mlp_score":    dsm_mse_loss,
+    "linear_mse":        dsm_mse_loss,
+    "linear_huber":      dsm_huber_loss,
+    "two_branch":        dsm_mse_loss,
+    "fixed_weight":      dsm_mse_loss,
+    "mlp_score":         dsm_mse_loss,
+    "mggd_constrained":  dsm_mse_loss,
 }
 
 

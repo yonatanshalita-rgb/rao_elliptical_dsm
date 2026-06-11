@@ -182,6 +182,38 @@ class MLPScore(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# Model 6: MGGD-constrained score
+# ---------------------------------------------------------------------------
+
+class MGGDConstrainedScore(nn.Module):
+    """
+    Parametric MGGD score family:
+        score = exp(log_c) * clamp(||Ax||^2, 1e-4)^(exp(log_alpha_shifted)-1) * (-A^T A x)
+
+    At optimum: A = M^{-1/2}, exp(log_alpha_shifted)-1 = beta-1, exp(log_c) = beta/m^beta.
+
+    alpha = exp(log_alpha_shifted) - 1  guarantees alpha > -1 (i.e. beta > 0) without
+    clamping.  Initialised at alpha=0 (Gaussian), which is a stable starting point for
+    Newton-style gradient descent toward the true beta.
+    """
+
+    def __init__(self, n: int):
+        super().__init__()
+        self.A = nn.Parameter(torch.eye(n) / n ** 0.5)
+        self.log_alpha_shifted = nn.Parameter(torch.zeros(1))  # alpha = exp(.)-1 = 0
+        self.log_c = nn.Parameter(torch.zeros(1))               # c = 1
+
+    def forward(self, x: Tensor) -> Tensor:
+        """x: (..., n)  ->  score: (..., n)"""
+        z = x @ self.A.T                                        # (..., n)
+        v = -(z @ self.A)                                       # (..., n)
+        d = (z * z).sum(dim=-1, keepdim=True).clamp(min=1e-4)  # (..., 1)
+        alpha = torch.exp(self.log_alpha_shifted) - 1.0         # scalar, > -1
+        c = torch.exp(self.log_c)                               # scalar, > 0
+        return c * d.pow(alpha) * v                             # (..., n)
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
@@ -199,5 +231,7 @@ def build_model(model_type: str, n: int, **kwargs) -> nn.Module:
         return FixedWeightScore(n, **kwargs)
     elif model_type == "mlp_score":
         return MLPScore(n, **kwargs)
+    elif model_type == "mggd_constrained":
+        return MGGDConstrainedScore(n, **kwargs)
     else:
         raise ValueError(f"Unknown model_type: {model_type}")
