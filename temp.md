@@ -302,3 +302,149 @@ _________
 
   This is a proper oracle upper bound that we're currently missing from the experiment. Want me to add it?
 
+________
+● This is the central theoretical question. Here's what we know and what follows from it:
+  
+  The hierarchy of convergence targets:
+
+  ┌─────────────────────────────────┬────────────────────────────────────────────────────────────┐
+  │              Model              │                        Converges to                        │                                                               
+  ├─────────────────────────────────┼────────────────────────────────────────────────────────────┤
+  │ Linear DSM                      │ $\nabla \log \mathcal{N}(0,\Sigma) = -Qy$ → Gaussian AMF   │
+  ├─────────────────────────────────┼────────────────────────────────────────────────────────────┤
+  │ Two-branch, $\sigma \to 0$      │ $\nabla \log t_\nu = -w(A)Qy$ → oracle t-Rao               │
+  ├─────────────────────────────────┼────────────────────────────────────────────────────────────┤
+  │ Unconstrained MLP, $\sigma > 0$ │ $\nabla \log q_\sigma(y) = -W(y)y$ → oracle $q_\sigma$-Rao │
+  ├─────────────────────────────────┼────────────────────────────────────────────────────────────┤
+  │ Two-branch, $\sigma > 0$        │ ???                                                        │
+  └─────────────────────────────────┴────────────────────────────────────────────────────────────┘
+
+  What the two-branch converges to for $\sigma > 0$:
+
+  The true $q_\sigma$ score is $-W(y)y$ where $W(y) = \mathbb{E}_{\tau|y}[(\tau\Sigma + \sigma^2 I)^{-1}]$ is a matrix — it applies a different weight per eigendirection of
+  $\Sigma$. The architecture forces $\psi = u(d) \cdot Qy$ — a single scalar for all directions. These two classes don't intersect for non-isotropic $\Sigma$.
+
+  So the two-branch converges to the L2-projection of $\nabla \log q_\sigma$ onto the scalar-weight function class ${u(y^\top Qy) \cdot Qy}$:
+
+  $$u^*(d_0) = \frac{\mathbb{E}{A=d_0}!\left[(Qy)^\top W(y),y\right]}{\mathbb{E}{A=d_0}!\left[|Qy|^2\right]}$$
+
+  This is a weighted average of the per-eigendirection weights $w_i(y) = \mathbb{E}[1/(\tau d_i + \sigma^2)|y]$, and it has no closed form.
+
+  Why this is better than oracle $q_\sigma$-Rao at large $\theta$:
+
+  At large $A$, the oracle $q_\sigma$-Rao converges to the oracle t-Rao (analytically provable — $\sigma^2 I$ becomes negligible relative to $\tau\Sigma$, so the
+  direction-dependent weights all collapse to $w(A)$). Both get suppressed. But $u^(d)$ is shaped by the moderate-$A$ training distribution where different eigendirections have
+  genuinely different weights — the scalar average $u^(d)$ sits above the correct weight for the signal direction (which is the most suppressed direction in AR(1)), giving more
+  weight to the signal than either oracle does.
+
+  As $\sigma$ varies:
+  - $\sigma \to 0$: $q_\sigma \to t_\nu$, its score IS scalar-weighted, architecture matches exactly → t-Rao
+  - $\sigma = 0.5$: scalar projection of $q_\sigma$-score, avoids suppression → tracks t-GLRT
+  - $\sigma \to \infty$: $q_\sigma \to \mathcal{N}(0, \sigma^2 I)$, score $\to -y/\sigma^2$ (isotropic), projection → constant scalar → Gaussian AMF
+
+  So $\sigma$ interpolates the two-branch continuously between t-Rao ($\sigma=0$) and Gaussian AMF ($\sigma \to \infty$), with the "sweet spot" for detection somewhere in between —
+  empirically around $\sigma = 0.5$ for this problem.
+
+________
+
+
+● Yes — here's the proof for sigma → 0, and a nuance for sigma → ∞.
+  
+  ---
+  sigma → 0: MLP converges to t-Rao
+
+  Step 1 (Tweedie's formula). The DSM MSE minimiser over all measurable functions is exactly $\psi^* = \nabla\log q_\sigma$ (Vincent 2011). An unconstrained MLP with sufficient
+  capacity approximates this to arbitrary precision.
+
+  Step 2 (Score of the convolved distribution). Using the scale-mixture $\mathbf{w} = \sqrt{\tau}\mathbf{z}$, $\tau \sim \text{IG}(\nu/2, \nu/2)$:
+
+  $$\nabla\log q_\sigma(\mathbf{y}) = -,\mathbb{E}_{\tau|\mathbf{y}}!\left[(\tau\Sigma + \sigma^2 I)^{-1}\right]\mathbf{y}$$
+
+  Step 3 (Limit). As $\sigma \to 0$, for each $\tau > 0$: $(\tau\Sigma + \sigma^2 I)^{-1} \to (1/\tau)Q$ pointwise. By dominated convergence:
+
+  $$\mathbb{E}_{\tau|\mathbf{y}}!\left[(\tau\Sigma + \sigma^2 I)^{-1}\right] \xrightarrow{\sigma\to 0} \mathbb{E}[1/\tau,|,\mathbf{y}]\cdot Q$$
+
+  Step 4 (Posterior expectation). At $\sigma = 0$ exactly, $\tau|\mathbf{y}$ is $\text{IG}!\left(\frac{\nu+d}{2},, \frac{\nu+A}{2}\right)$ (exact conjugacy). For $X \sim
+  \text{IG}(\alpha, \beta)$: $\mathbb{E}[1/X] = \alpha/\beta$. Therefore:
+
+  $$\mathbb{E}[1/\tau,|,\mathbf{y}] = \frac{(\nu+d)/2}{(\nu+A)/2} = \frac{\nu+d}{\nu+A} = w(A)$$
+
+  Conclusion. $\psi^*(\mathbf{y}) \to -w(A)Q\mathbf{y} = \nabla\log t_\nu(\mathbf{y})$, which produces the t-Rao test statistic. $\square$
+
+  ---
+  sigma → ∞: a nuance
+
+  As $\sigma \to \infty$, $q_\sigma \approx \mathcal{N}(\mathbf{0}, \sigma^2 I)$ (the t-distribution's contribution to the covariance becomes negligible) and $\nabla\log
+  q_\sigma(\mathbf{y}) \approx -\mathbf{y}/\sigma^2$. The MLP learns $\psi \approx -\mathbf{y}/\sigma^2$, giving a test statistic $\propto \mathbf{s}^\top\mathbf{y}$ — a matched
+  filter assuming identity covariance.
+
+  This is NOT the oracle AMF $B/\sqrt{C} = \mathbf{s}^\top Q\mathbf{y}/\sqrt{\mathbf{s}^\top Q\mathbf{s}}$, which uses the true $Q = \Sigma^{-1}$. For AR(1) with $\rho = 0.9$, $Q$
+  is far from the identity, so these are different tests. The empirical results confirm this — MLP at $\sigma=5$ does not match oracle AMF (Pd=0.302 vs 0.126 at SNR=10dB).
+
+
+  $$T_s ;\propto; w(A)\cdot\mathbf{s}^\top Q\mathbf{y} = w(A)\cdot B ;\propto; T_{\mathrm{Rao}}$$
+
+  $\square$
+
+  ---
+  Remark. The proof is stronger for the two-branch than for an unconstrained MLP. The MLP requires universal approximation (infinite capacity) to represent $\nabla\log t_\nu$; the
+  two-branch achieves it with finite parameters because the t-score happens to lie exactly in $\mathcal{F}$. This is why the two-branch converges to the t-Rao even at small
+  $\sigma$ where the MLP's optimisation fails.
+
+✻ Baked for 1m 14s
+
+❯ could you prove this just for the split branch?                                                                                                                                   
+
+● Theorem. As $\sigma \to \infty$, the two-branch DSM model converges to a Gaussian matched filter (AMF-like behaviour) — the adaptive scalar weight $u^*(d)$ collapses to a
+  constant, eliminating the Mahalanobis-dependent weighting.
+
+  Proof.
+
+  Step 1 — Score of the convolved distribution at large $\sigma$.                                                                                                
+
+  As before, $\nabla\log q_\sigma(\mathbf{y}) = -\mathbb{E}_{\tau|\mathbf{y}}[(\tau\Sigma + \sigma^2 I)^{-1}],\mathbf{y}$.
+
+  For $\sigma^2 \gg |\tau\Sigma|_{\mathrm{op}}$ (which holds almost surely since $\tau$ has finite mean $\nu/(\nu-2)$), the matrix inverse expands as:
+
+  $$(\tau\Sigma + \sigma^2 I)^{-1} = \frac{1}{\sigma^2}\left(I - \frac{\tau\Sigma}{\sigma^2} + O(\sigma^{-4})\right)$$
+
+  Taking the posterior expectation and retaining leading order:
+
+  $$\nabla\log q_\sigma(\mathbf{y}) = -\frac{1}{\sigma^2}\mathbf{y} + O(\sigma^{-4})$$
+
+  The score becomes isotropic — all directional information about $\Sigma$ vanishes at leading order.
+
+  Step 2 — The isotropic score is in $\mathcal{F}$.
+
+  Set $A = \frac{1}{\sigma}I$ and $u \equiv 1$. Then:
+
+  $$\psi(\mathbf{y}) = 1 \cdot \left(-\frac{1}{\sigma^2}I,\mathbf{y}\right) = -\frac{\mathbf{y}}{\sigma^2}$$
+
+  This is a feasible point in $\mathcal{F}$, and it matches the target exactly at leading order.
+
+  Step 3 — The projection residual vanishes.
+
+  The optimal projection satisfies:
+
+  $$|\psi^*_\sigma - \nabla\log q_\sigma|^2_{L^2(q_\sigma)} ;\leq; \left|-\frac{\mathbf{y}}{\sigma^2} - \nabla\log q_\sigma(\mathbf{y})\right|^2_{L^2(q_\sigma)} = O(\sigma^{-4})
+  ;\to; 0$$
+
+  Step 4 — The weight function collapses to a constant.
+
+  With $\psi^_\sigma(\mathbf{y}) = u^(|A^\mathbf{y}|^2)\cdot(-{A^}^\top A^\mathbf{y}) \to -\mathbf{y}/\sigma^2$, the output is proportional to $\mathbf{y}$ for every input. This
+  requires $u^(d)$ to be independent of $d$ — any $d$-dependence would create non-isotropic reweighting inconsistent with the target. Therefore:
+
+  $$u^*(d) ;\to; \text{const} \quad \text{as } \sigma\to\infty$$
+
+  The adaptive Mahalanobis weighting $w(A) = (\nu+d)/(\nu+A)$ that characterises the t-Rao disappears entirely.
+
+  Step 5 — Detection statistic.
+
+  The NeuralDetector computes $T_s \propto \mathbf{s}^\top\psi^*(\mathbf{y}) \propto \mathbf{s}^\top\mathbf{y}$. This is a linear matched filter — detection by inner product with
+  $\mathbf{s}$, with no account of the noise covariance $\Sigma$ or tail index $\nu$. This is the defining property of the AMF. $\square$
+
+  ---
+  Remark. The AMF reached at $\sigma\to\infty$ is an isotropic matched filter ($\mathbf{s}^\top\mathbf{y}$), not the oracle AMF ($B/\sqrt{C} = \mathbf{s}^\top
+  Q\mathbf{y}/\sqrt{\mathbf{s}^\top Q\mathbf{s}}$) which uses the true $Q$. The empirical convergence to oracle AMF at $\sigma=5$ (rather than isotropic AMF) occurs because
+  $\sigma=5$ is not truly $\infty$ — the noise samples $\mathbf{w}$ still carry information about $\Sigma$, causing the W-branch to retain some covariance structure. The oracle AMF
+  is only recovered exactly in the limit when the W-branch is separately trained to learn $Q$ (as in the linear DSM model).

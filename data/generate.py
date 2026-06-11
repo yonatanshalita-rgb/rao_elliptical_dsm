@@ -13,6 +13,7 @@ import numpy as np
 import torch
 from torch import Tensor
 from typing import Literal
+from scipy.special import gammaln
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +79,26 @@ MU_DISTRIBUTIONS = {
     "compound_gaussian": sample_mu_compound_gaussian,
     "t": sample_mu_t,
 }
+
+
+# ---------------------------------------------------------------------------
+# MGGD scale normalization
+# ---------------------------------------------------------------------------
+
+def compute_m_norm(beta: float, p: int) -> float:
+    """
+    Compute m such that E[tau^2] = p for MGGD(p, M, m, beta).
+
+    Derivation: tau^{2*beta} ~ Gamma(p/(2*beta), 2*m^beta), so
+        E[tau^2] = 2^{1/beta} * m * Gamma((p+2)/(2*beta)) / Gamma(p/(2*beta)).
+    Setting E[tau^2] = p and solving for m (in log-space to avoid overflow):
+        log m = log(p) + gammaln(p/(2*beta)) - log(2)/beta - gammaln((p+2)/(2*beta))
+    """
+    log_m = (np.log(p)
+             + gammaln(p / (2.0 * beta))
+             - np.log(2.0) / beta
+             - gammaln((p + 2.0) / (2.0 * beta)))
+    return float(np.exp(log_m))
 
 
 # ---------------------------------------------------------------------------

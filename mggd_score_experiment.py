@@ -41,7 +41,7 @@ from baselines.classical import (
     fit_mggd_mle, score_mggd_mle,
     score_tyler_linear, tyler_estimator, fit_tyler_safe,
 )
-from data.generate import ar1_covariance, sample_mggd, mggd_true_score
+from data.generate import ar1_covariance, sample_mggd, mggd_true_score, compute_m_norm
 from models.score_models import build_model
 from models.train import train
 
@@ -51,7 +51,6 @@ from models.train import train
 
 DIM_LIST  = [3, 64]       # default --dim values
 RHO_AR1   = 0.8
-M_PARAM   = 1.0
 BETA_LIST = [0.2, 0.5, 0.8]
 
 N_MC_FULL  = 10
@@ -185,10 +184,11 @@ def run_synthetic(N_VALUES, N_MC, beta_list, p: int,
     results = {}
 
     for beta in beta_list:
+        m = compute_m_norm(beta, p)
         group = (p, beta)
-        print(f"\n=== p={p}, beta={beta} ===")
-        X_test = sample_mggd(N_TEST, p, M, M_PARAM, beta, seed=9999)
-        s_true = mggd_true_score(X_test, M_inv, M_PARAM, beta)
+        print(f"\n=== p={p}, beta={beta}, m_norm={m:.4e} ===")
+        X_test = sample_mggd(N_TEST, p, M, m, beta, seed=9999)
+        s_true = mggd_true_score(X_test, M_inv, m, beta)
 
         for n in N_VALUES:
             print(f"  n={n}:", flush=True)
@@ -197,7 +197,7 @@ def run_synthetic(N_VALUES, N_MC, beta_list, p: int,
             mle_cache   = {}
             tyler_cache = {}
             for mc in range(N_MC):
-                X_tr = sample_mggd(n, p, M, M_PARAM, beta, seed=mc * 10)
+                X_tr = sample_mggd(n, p, M, m, beta, seed=mc * 10)
                 result = fit_mggd_mle(X_tr)
                 mle_cache[mc] = score_mggd_mle(X_test, *result) if result else None
                 C_ty = fit_tyler_safe(X_tr)
@@ -218,8 +218,8 @@ def run_synthetic(N_VALUES, N_MC, beta_list, p: int,
             # DSM methods — retrain at each sigma
             for sigma in sigma_list:
                 for mc in range(N_MC):
-                    X_tr  = sample_mggd(n, p, M, M_PARAM, beta, seed=mc * 10)
-                    X_val = sample_mggd(max(n // 5, p + 1), p, M, M_PARAM, beta,
+                    X_tr  = sample_mggd(n, p, M, m, beta, seed=mc * 10)
+                    X_val = sample_mggd(max(n // 5, p + 1), p, M, m, beta,
                                         seed=mc * 10 + 1)
                     for mtype, label in [("linear_mse",       "Linear DSM"),
                                          ("two_branch",        "TwoBranch DSM"),

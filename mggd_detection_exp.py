@@ -43,7 +43,7 @@ from baselines.classical import (
     fit_mggd_mle, score_mggd_mle,
     fit_tyler_safe, score_tyler_linear,
 )
-from data.generate import ar1_covariance, sample_mggd, mggd_true_score
+from data.generate import ar1_covariance, sample_mggd, mggd_true_score, compute_m_norm
 from models.score_models import build_model
 from models.train import train
 
@@ -55,8 +55,8 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 P          = 64
 BETA       = 0.5
-M_PARAM    = 1.0
 RHO        = 0.8
+M_PARAM    = compute_m_norm(BETA, P)   # E[tau^2] = p; keeps score magnitude O(1)
 SIGMA_DSM  = 0.3
 N_TEST     = 50_000
 PFA        = 0.01
@@ -70,11 +70,14 @@ N_TRAIN_QUICK = [50, 200, 1000, 5000]
 N_MC_FULL     = 5
 N_MC_QUICK    = 2
 
-EVAL_SNR_LIST   = [20, 25, 30, 35, 40, 45]
-FIXED_SNR       = 35         # x-axis: N_train; Oracle Pd~0.9 here; methods spread wide
-FIXED_N_VALS    = [200, 1000, 5000, 20_000]   # x-axis: SNR; one subplot per N
+# With m_norm, Var[x] = M (same as Gaussian), so the matched-filter SNR
+# maps to detection probability on the same dB scale as the Gaussian AMF.
+# Gaussian AMF Pd@Pfa=0.01: SNR=7dB->0.46, SNR=11dB->0.89, SNR=13dB->0.98.
+EVAL_SNR_LIST   = [5, 7, 9, 11, 13, 15]
+FIXED_SNR       = 11         # Oracle Pd ~0.85-0.90 here
+FIXED_N_VALS    = [200, 1000, 5000, 20_000]
 ROC_N           = 200
-ROC_SNR         = 35
+ROC_SNR         = 11
 
 METHOD_NAMES = [
     "Oracle Rao",
@@ -178,7 +181,8 @@ def _roc_metrics(T_h0: np.ndarray, T_h1: np.ndarray):
 
 def run_detection(N_TRAIN_LIST: list, N_MC: int,
                   snr_list: list | None = None,
-                  eval_only: bool = False) -> dict:
+                  eval_only: bool = False,
+                  resume: bool = False) -> dict:
     snr_list = snr_list or EVAL_SNR_LIST
 
     M     = ar1_covariance(P, RHO)
@@ -192,19 +196,26 @@ def run_detection(N_TRAIN_LIST: list, N_MC: int,
     # Load existing results (for eval_only or resume)
     results    = {}   # (method, n_train, snr_db) -> [(auc, pd), ...]
     roc_curves = {}   # (method, mc)               -> (fpr, tpr) at ROC_N, ROC_SNR
-    if eval_only and RESULTS_PKL.exists():
+    if (eval_only or resume) and RESULTS_PKL.exists():
         with open(RESULTS_PKL, "rb") as f:
             saved = pickle.load(f)
         results    = saved.get("results",    {})
         roc_curves = saved.get("roc_curves", {})
-        print(f"Loaded results from {RESULTS_PKL}")
-        return {"results": results, "roc_curves": roc_curves}
+        print(f"Loaded {len(results)} result entries from {RESULTS_PKL}")
+        if eval_only:
+            return {"results": results, "roc_curves": roc_curves}
 
     for n_train in N_TRAIN_LIST:
         ne = _n_epochs(n_train)
         print(f"\n  N_train={n_train} (epochs={ne}):", flush=True)
 
         for mc in range(N_MC):
+            # Skip seeds already fully evaluated (crash-resume support)
+            if resume:
+                oracle_done = results.get(("Oracle Rao", n_train, snr_list[0]), [])
+                if len(oracle_done) > mc:
+                    print(f"    mc {mc+1}/{N_MC} already done, skipping", flush=True)
+                    continue
             X_train = sample_mggd(n_train, P, M, M_PARAM, BETA, seed=mc * 10)
 
             # ----- classical baselines -----
@@ -443,6 +454,8 @@ def main():
                         help="small N grid, N_MC=2, no N=20000")
     parser.add_argument("--eval_only", action="store_true",
                         help="skip training; load checkpoints and replot")
+    parser.add_argument("--resume",    action="store_true",
+                        help="load saved pkl and skip already-completed seeds")
     parser.add_argument("--snr_list",  nargs="+", type=float, default=None,
                         help="override SNR list (dB)")
     parser.add_argument("--n_mc",      type=int, default=None)
@@ -469,7 +482,8 @@ def main():
     print(f"p={P}, beta={BETA}, rho={RHO}, sigma_dsm={SIGMA_DSM}")
     print(f"N_MC={N_MC}, N_train={N_TRAIN}, SNR={snr_list}")
 
-    data = run_detection(N_TRAIN, N_MC, snr_list=snr_list, eval_only=args.eval_only)
+    data = run_detection(N_TRAIN, N_MC, snr_list=snr_list,
+                         eval_only=args.eval_only, resume=args.resume)
     results    = data["results"]
     roc_curves = data["roc_curves"]
 
