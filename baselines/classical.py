@@ -316,7 +316,12 @@ def fit_mggd_mle(X: np.ndarray, max_iter: int = 100,
         M_new = M_new * p / tr_new
 
         # --- closed form for m (eq. 8) ---
-        m = ((beta / (p * N)) * S) ** (1.0 / beta)
+        raw = (beta / (p * N)) * S
+        if raw < 1e-300:
+            return None  # degenerate: Mahalanobis distances collapsed to zero
+        m = raw ** (1.0 / beta)
+        if m < 1e-20:
+            return None
 
         # --- Newton-Raphson for beta (eq. 13) ---
         eps = 1e-4
@@ -340,6 +345,7 @@ def fit_mggd_mle(X: np.ndarray, max_iter: int = 100,
 def score_mggd_mle(X_test: np.ndarray, M: np.ndarray,
                    m: float, beta: float) -> np.ndarray:
     """Analytic MGGD score using fitted (M, m, beta)."""
+    m = max(float(m), 1e-300)
     M_inv = np.linalg.inv(M)
     Minv_x = X_test @ M_inv.T                                # (N, p)
     y = (X_test * Minv_x).sum(axis=1)                        # (N,)
