@@ -57,7 +57,7 @@ N_MC         = 5        # mean ± 1-std band
 **No val set.** All N_train samples go to DSM training. Dropping the val set keeps the
 N budget identical for DSM and the classical baselines (both use exactly N_train samples),
 and avoids giving DSM a hidden disadvantage at small N. Use fixed adaptive epochs without
-early stopping: `epochs = max(100, 10_000 // max(1, N_train // BATCH_SIZE))`.
+early stopping: `epochs = max(100, 6_000 // max(1, N_train // BATCH_SIZE))`.
 
 ---
 
@@ -166,7 +166,7 @@ Training is outer, SNR evaluation is inner — avoids re-training for each SNR p
 ### Per-seed progress print
 After each mc seed finishes all SNR evaluations, print:
 ```
-  [N=200 mc 3/5 snr=5] Oracle cos=1.000 MLE pd=0.812 Two pd=0.743 ...
+  [N=200 mc 3/5 snr=5] Oracle pd=0.943 MLE pd=0.812 Two pd=0.743 ...
 ```
 
 ---

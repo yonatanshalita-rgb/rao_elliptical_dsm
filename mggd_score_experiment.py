@@ -97,8 +97,12 @@ METHOD_NAMES = list(COLORS.keys())
 # Helpers
 # ---------------------------------------------------------------------------
 
-def score_mse(s_hat: np.ndarray, s_true: np.ndarray) -> float:
-    return float(((s_hat - s_true) ** 2).mean())
+def score_nmse(s_hat: np.ndarray, s_true: np.ndarray) -> float:
+    """Normalized MSE = MSE / E[||s_true||²].  0=perfect, 1=zero predictor."""
+    denom = float((s_true ** 2).mean())
+    if denom < 1e-300:
+        return float("nan")
+    return float(((s_hat - s_true) ** 2).mean()) / denom
 
 
 def score_cosine(s_hat: np.ndarray, s_true: np.ndarray) -> float:
@@ -156,13 +160,13 @@ def _eval_dsm(model: torch.nn.Module, X_test: np.ndarray) -> np.ndarray:
         return model(t).cpu().numpy()
 
 
-# results[key] = {'mse': list, 'cos': list}
-# key = (beta_or_label, sigma_or_'mle_tyler', method_name, n)
+# results[key] = {'nmse': list, 'cos': list}
+# key = (beta_or_label, sigma_or_'baseline', method_name, n)
 def _record(results: dict, key: tuple, s_hat: np.ndarray,
             s_true: np.ndarray) -> None:
     if key not in results:
-        results[key] = {"mse": [], "cos": []}
-    results[key]["mse"].append(score_mse(s_hat, s_true))
+        results[key] = {"nmse": [], "cos": []}
+    results[key]["nmse"].append(score_nmse(s_hat, s_true))
     results[key]["cos"].append(score_cosine(s_hat, s_true))
 
 
@@ -209,7 +213,7 @@ def run_synthetic(N_VALUES, N_MC, beta_list, p: int,
                             tyler_cache[mc], s_true)
             mle_entry = results.get((group, "baseline", "Pascal MLE", n))
             if mle_entry:
-                print(f"  [baselines] MLE MSE={np.mean(mle_entry['mse']):.4f}", flush=True)
+                print(f"  [baselines] MLE nMSE={np.mean(mle_entry['nmse']):.4f} cos={np.mean(mle_entry['cos']):.4f}", flush=True)
 
             # DSM methods — retrain at each sigma
             for sigma in sigma_list:
@@ -228,15 +232,15 @@ def run_synthetic(N_VALUES, N_MC, beta_list, p: int,
                         e = results.get(k)
                         if e is None:
                             return float("nan"), float("nan")
-                        return np.mean(e["mse"]), np.mean(e["cos"])
-                    lin_mse,  lin_cos  = _stat((group, sigma, "Linear DSM",       n))
-                    two_mse,  two_cos  = _stat((group, sigma, "TwoBranch DSM",    n))
-                    mgg_mse,  mgg_cos  = _stat((group, sigma, "MGGD Constrained", n))
+                        return np.mean(e["nmse"]), np.mean(e["cos"])
+                    lin_n,  lin_c  = _stat((group, sigma, "Linear DSM",       n))
+                    two_n,  two_c  = _stat((group, sigma, "TwoBranch DSM",    n))
+                    mgg_n,  mgg_c  = _stat((group, sigma, "MGGD Constrained", n))
                     print(
                         f"  [sigma={sigma} mc {mc+1}/{N_MC}]"
-                        f"  Lin  mse={lin_mse:.4f} cos={lin_cos:.4f}"
-                        f"  Two  mse={two_mse:.4f} cos={two_cos:.4f}"
-                        f"  MGGD mse={mgg_mse:.4f} cos={mgg_cos:.4f}",
+                        f"  Lin  nMSE={lin_n:.4f} cos={lin_c:.4f}"
+                        f"  Two  nMSE={two_n:.4f} cos={two_c:.4f}"
+                        f"  MGGD nMSE={mgg_n:.4f} cos={mgg_c:.4f}",
                         flush=True,
                     )
 
@@ -362,21 +366,21 @@ def run_vistex(N_VALUES, N_MC, vistex_dir: Path):
 # ---------------------------------------------------------------------------
 
 def _gather(results: dict, group, sigma_or_base, method, N_VALUES):
-    means_mse, stds_mse = [], []
-    means_cos, stds_cos = [], []
+    means_nmse, stds_nmse = [], []
+    means_cos,  stds_cos  = [], []
     ns_used = []
     for n in N_VALUES:
         key = (group, sigma_or_base, method, n)
-        if key not in results or not results[key]["mse"]:
+        if key not in results or not results[key]["nmse"]:
             continue
         ns_used.append(n)
-        means_mse.append(np.mean(results[key]["mse"]))
-        stds_mse.append(np.std(results[key]["mse"]))
+        means_nmse.append(np.mean(results[key]["nmse"]))
+        stds_nmse.append(np.std(results[key]["nmse"]))
         means_cos.append(np.mean(results[key]["cos"]))
         stds_cos.append(np.std(results[key]["cos"]))
     return (np.array(ns_used),
-            np.array(means_mse), np.array(stds_mse),
-            np.array(means_cos), np.array(stds_cos))
+            np.array(means_nmse), np.array(stds_nmse),
+            np.array(means_cos),  np.array(stds_cos))
 
 
 def _slug(group) -> str:
@@ -388,23 +392,25 @@ def _slug(group) -> str:
 
 
 def print_summary(results: dict, groups, group_labels, N_VALUES):
-    """Print MSE table: rows = N, cols = method, one block per group."""
+    """Print nMSE + cosine table: rows = N, cols = method, one block per group."""
     methods_ordered = METHOD_NAMES
     for group, glabel in zip(groups, group_labels):
-        print(f"\n--- {glabel} (MSE @ sigma={SIGMA_MAIN}) ---")
-        header = f"{'N':>6}  " + "  ".join(f"{m[:12]:>12}" for m in methods_ordered)
-        print(header)
-        for n in N_VALUES:
-            row = f"{n:>6}  "
-            for method in methods_ordered:
-                sk = "baseline" if method in ("Pascal MLE", "Tyler AMF") else SIGMA_MAIN
-                key = (group, sk, method, n)
-                if key in results and results[key]["mse"]:
-                    val = np.mean(results[key]["mse"])
-                    row += f"  {val:>12.4f}"
-                else:
-                    row += f"  {'—':>12}"
-            print(row)
+        for metric, label in [("nmse", f"nMSE @ sigma={SIGMA_MAIN}"),
+                               ("cos",  f"cosine @ sigma={SIGMA_MAIN}")]:
+            print(f"\n--- {glabel} ({label}) ---")
+            header = f"{'N':>6}  " + "  ".join(f"{m[:12]:>12}" for m in methods_ordered)
+            print(header)
+            for n in N_VALUES:
+                row = f"{n:>6}  "
+                for method in methods_ordered:
+                    sk = "baseline" if method in ("Pascal MLE", "Tyler AMF") else SIGMA_MAIN
+                    key = (group, sk, method, n)
+                    if key in results and results[key][metric]:
+                        val = np.mean(results[key][metric])
+                        row += f"  {val:>12.4f}"
+                    else:
+                        row += f"  {'—':>12}"
+                print(row)
 
 
 def plot_main(results: dict, groups, group_labels, N_VALUES, out_dir: Path):
@@ -412,8 +418,8 @@ def plot_main(results: dict, groups, group_labels, N_VALUES, out_dir: Path):
     out_dir.mkdir(parents=True, exist_ok=True)
 
     for group, glabel in zip(groups, group_labels):
-        for metric, ylabel, suffix in [("mse", "Score MSE", "mse"),
-                                        ("cos", "Cosine similarity", "cos")]:
+        for metric, ylabel, suffix in [("nmse", "Normalized score MSE (nMSE)", "nmse"),
+                                        ("cos",  "Cosine similarity",           "cos")]:
             fig, ax = plt.subplots(figsize=(6, 4))
 
             for method in METHOD_NAMES:
@@ -423,8 +429,8 @@ def plot_main(results: dict, groups, group_labels, N_VALUES, out_dir: Path):
                                                  method, N_VALUES)
                 if len(ns) == 0:
                     continue
-                vals  = mm if metric == "mse" else mc_
-                stds  = ms if metric == "mse" else mcs_
+                vals  = mm if metric == "nmse" else mc_
+                stds  = ms if metric == "nmse" else mcs_
                 color = COLORS[method]
                 ax.plot(ns, vals, marker="o", color=color, label=method)
                 ax.fill_between(ns, vals - stds, vals + stds,
@@ -481,7 +487,7 @@ def plot_sigma_sweep(results: dict, groups, group_labels, N_VALUES, out_dir: Pat
             ax.legend(fontsize=7)
             ax.grid(True, which="both", alpha=0.3)
 
-        axes[0].set_ylabel("Score MSE")
+        axes[0].set_ylabel("Normalized score MSE (nMSE)")
         fig.suptitle(f"σ sweep — {glabel}", fontsize=11)
         fig.tight_layout()
         fname = out_dir / f"mggd_sigma_sweep_{_slug(group)}.png"
