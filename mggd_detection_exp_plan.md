@@ -2,8 +2,8 @@
 
 ## Goal
 
-Show that DSM-based Rao detectors beat classical methods at low N on heavy-tailed MGGD
-data (β=0.2, ρ=0.8), while MLE Rao and Oracle recover asymptotically.
+Show that DSM-based Rao detectors beat classical methods at low N on MGGD
+data (β=0.5, ρ=0.8), while MLE Rao and Oracle recover asymptotically.
 Two sweep axes: N_train (can we learn from few samples?) and SNR (does the gap depend
 on signal strength?).
 
@@ -35,7 +35,8 @@ Rao statistic: T(x) = s^T · score(x)   (gradient of log-likelihood w.r.t. θ at
 
 ```
 p       = 64
-beta    = 0.2          # heavy-tailed; largest gap between MGGD-aware and Gaussian AMF
+beta    = 0.5          # moderate heavy-tails; tau~Gamma(64,2) keeps noise at manageable scale
+                       # beta=0.5 makes noise amplitude ~1e6, drowning any reasonable signal
 m       = 1.0
 rho     = 0.8          # AR(1) covariance, matching score experiment
 M       = ar1_covariance(p, rho=0.8)
@@ -64,7 +65,10 @@ early stopping: `epochs = max(100, 6_000 // max(1, N_train // BATCH_SIZE))`.
 ## Varying axis 2: SNR
 
 ```python
-EVAL_SNR_LIST = [1, 3, 5, 10, 15, 20]   # dB
+EVAL_SNR_LIST = [20, 25, 30, 35, 40, 45]  # dB
+# For beta=0.5, m=1, p=64, rho=0.8: tau~Gamma(64,2) -> E[tau]=128.
+# Rao test SNR ~ theta*C*E[1/tau] ~ theta*0.178*(1/126).
+# Oracle reaches Pd=0.9 only at ~35 dB; interesting spread is 25-40 dB.
 ```
 
 Both sweep axes produce separate plots (see Figures below).
@@ -107,7 +111,7 @@ figures/mggd_det_pd_vs_snr_NXX_p64_beta0.2.png   # Pd@Pfa=0.01 vs SNR, one per N
 figures/mggd_det_roc_N200_snr5_p64_beta0.2.png    # ROC curve at N=200, SNR=5 dB
 ```
 
-Primary plot: Pd vs N_train at SNR=5 dB (enough separation to distinguish methods).
+Primary plot: Pd vs N_train at SNR=35 dB (Oracle Pd~0.9; methods spread across 0.1–0.9).
 Secondary plot: Pd vs SNR at N_train ∈ {200, 1000, 5000, 20000}.
 
 ---
