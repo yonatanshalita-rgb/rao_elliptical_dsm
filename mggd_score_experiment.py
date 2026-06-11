@@ -483,7 +483,9 @@ def main():
     parser.add_argument("--beta", nargs="+", type=float, default=None)
     parser.add_argument("--dim",    nargs="+", type=int,   default=DIM_LIST,
                         help="dimension(s) for AR(1) synthetic experiment")
-    parser.add_argument("--device", type=str, default=None,
+    parser.add_argument("--n_mc",   type=int,  default=None,
+                        help="override number of MC seeds (e.g. 1 for a quick preview)")
+    parser.add_argument("--device", type=str,  default=None,
                         help="torch device: cpu | cuda (default: auto)")
     args = parser.parse_args()
 
@@ -497,7 +499,7 @@ def main():
         _DEVICE = "cpu"
     print(f"Using device: {_DEVICE}")
 
-    N_MC       = N_MC_QUICK        if args.quick else N_MC_FULL
+    N_MC       = args.n_mc if args.n_mc else (N_MC_QUICK if args.quick else N_MC_FULL)
     n_epochs   = DSM_EPOCHS_QUICK  if args.quick else DSM_EPOCHS
     sigma_list = SIGMA_LIST_QUICK  if args.quick else SIGMA_LIST
     beta_list  = args.beta if args.beta else BETA_LIST
