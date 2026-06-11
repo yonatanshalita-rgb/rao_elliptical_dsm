@@ -224,14 +224,19 @@ def run_synthetic(N_VALUES, N_MC, beta_list, p: int,
                         s_hat = _eval_dsm(model, X_test)
                         _record(results, (group, sigma, label, n), s_hat, s_true)
                     # running average after each seed
-                    def _rmse(k):
+                    def _stat(k):
                         e = results.get(k)
-                        return np.mean(e["mse"]) if e else float("nan")
+                        if e is None:
+                            return float("nan"), float("nan")
+                        return np.mean(e["mse"]), np.mean(e["cos"])
+                    lin_mse,  lin_cos  = _stat((group, sigma, "Linear DSM",       n))
+                    two_mse,  two_cos  = _stat((group, sigma, "TwoBranch DSM",    n))
+                    mgg_mse,  mgg_cos  = _stat((group, sigma, "MGGD Constrained", n))
                     print(
                         f"  [sigma={sigma} mc {mc+1}/{N_MC}]"
-                        f" Lin={_rmse((group, sigma, 'Linear DSM',       n)):.4f}"
-                        f" Two={_rmse((group, sigma, 'TwoBranch DSM',    n)):.4f}"
-                        f" MGGD={_rmse((group, sigma, 'MGGD Constrained', n)):.4f}",
+                        f"  Lin  mse={lin_mse:.4f} cos={lin_cos:.4f}"
+                        f"  Two  mse={two_mse:.4f} cos={two_cos:.4f}"
+                        f"  MGGD mse={mgg_mse:.4f} cos={mgg_cos:.4f}",
                         flush=True,
                     )
 
